@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Surya Electronics Micro POS</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-100 text-slate-900">
+  <div class="min-h-screen">
+    <header class="bg-blue-600 text-white shadow-lg">
+      <div class="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <h1 class="text-3xl font-bold">Surya Electronics</h1>
+        <p class="mt-1 text-blue-100">Main Road, Mandapeta. Phone: +91 76618 29283</p>
+      </div>
+    </header>
+
+    <main class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <section class="grid gap-6 lg:grid-cols-2">
+        <div class="rounded-2xl bg-white p-6 shadow">
+          <h2 class="text-xl font-semibold">New Service Log</h2>
+          <form id="serviceForm" class="mt-4 space-y-4">
+            <input class="w-full rounded-lg border px-4 py-3" name="name" placeholder="Customer name" required />
+            <input class="w-full rounded-lg border px-4 py-3" name="phone" placeholder="10-digit mobile number" maxlength="10" required />
+            <textarea class="w-full rounded-lg border px-4 py-3" name="issue" placeholder="Issue description" rows="4" required></textarea>
+            <label class="flex items-center gap-3 rounded-lg bg-slate-50 px-4 py-3">
+              <input id="immediateService" type="checkbox" class="h-4 w-4" />
+              <span class="font-medium">Mark as Immediate Service</span>
+            </label>
+            <div class="rounded-lg bg-slate-50 px-4 py-3 text-sm">
+              Estimated completion: <span id="targetTime" class="font-semibold"></span>
+            </div>
+            <button class="rounded-lg bg-blue-600 px-5 py-3 font-semibold text-white hover:bg-blue-700" type="submit">Create Job</button>
+          </form>
+          <p id="formMsg" class="mt-3 text-sm"></p>
+        </div>
+
+        <div class="rounded-2xl bg-white p-6 shadow">
+          <h2 class="text-xl font-semibold">Admin Access</h2>
+          <button id="openAdmin" class="mt-4 rounded-lg border border-blue-600 px-5 py-3 font-semibold text-blue-700 hover:bg-blue-50">Open Admin Panel</button>
+          <p class="mt-4 text-sm text-slate-600">Admin panel remains hidden until verified.</p>
+        </div>
+      </section>
+
+      <section id="adminPanel" class="mt-8 hidden rounded-2xl bg-white p-6 shadow">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h2 class="text-xl font-semibold">Operations Dashboard</h2>
+            <p class="text-sm text-slate-600">Live service tracking and status updates.</p>
+          </div>
+          <input id="searchPhoneFilter" class="w-full rounded-lg border px-4 py-3 lg:max-w-sm" placeholder="Filter by phone number" />
+        </div>
+        <div class="mt-4 overflow-auto">
+          <table class="min-w-full border-collapse text-left">
+            <thead>
+              <tr class="border-b bg-slate-50 text-sm">
+                <th class="px-4 py-3">Job ID</th>
+                <th class="px-4 py-3">Name</th>
+                <th class="px-4 py-3">Phone</th>
+                <th class="px-4 py-3">Issue</th>
+                <th class="px-4 py-3">Target Time</th>
+                <th class="px-4 py-3">Timestamp</th>
+                <th class="px-4 py-3">Status</th>
+              </tr>
+            </thead>
+            <tbody id="jobsTable"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="adminModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-900/70 px-4">
+    <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+      <h3 class="text-xl font-semibold">Admin Verification</h3>
+      <div class="mt-4 space-y-3">
+        <input id="adminPhone" class="w-full rounded-lg border px-4 py-3" placeholder="Admin phone number" />
+        <input id="adminPin" class="w-full rounded-lg border px-4 py-3" placeholder="Admin PIN" type="password" />
+      </div>
+      <div class="mt-4 flex items-center gap-3">
+        <button id="verifyAdmin" class="rounded-lg bg-blue-600 px-5 py-3 font-semibold text-white">Verify</button>
+        <button id="closeAdmin" class="rounded-lg border px-5 py-3 font-semibold">Cancel</button>
+      </div>
+      <p id="adminMsg" class="mt-3 text-sm text-red-600"></p>
+    </div>
+  </div>
+
+  <script>
+    const API_URL = '/api/submit';
+    const state = { data: [], admin: false, loading: false };
+
+    const el = (id) => document.getElementById(id);
+    const serviceForm = el('serviceForm');
+    const immediateService = el('immediateService');
+    const targetTime = el('targetTime');
+    const formMsg = el('formMsg');
+    const adminPanel = el('adminPanel');
+    const adminModal = el('adminModal');
+    const jobsTable = el('jobsTable');
+    const searchPhoneFilter = el('searchPhoneFilter');
+    const verifyAdminBtn = el('verifyAdmin');
+    const formButton = serviceForm.querySelector('button[type="submit"]');
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function calcTarget() {
+      const hours = immediateService.checked ? 1 : 4;
+      const dt = new Date(Date.now() + hours * 60 * 60 * 1000);
+      targetTime.textContent = dt.toLocaleString();
+      return dt.toLocaleString();
+    }
+
+    function openAdmin() { adminModal.classList.remove('hidden'); adminModal.classList.add('flex'); }
+    function closeAdmin() { adminModal.classList.add('hidden'); adminModal.classList.remove('flex'); }
+
+    function render() {
+      const q = searchPhoneFilter.value.trim();
+      const rows = state.data.filter((item) => !q || String(item.phone || '').includes(q));
+      if (!rows.length) {
+        jobsTable.innerHTML = `<tr><td colspan="7" class="px-4 py-6 text-center text-slate-500">${state.loading ? 'Loading jobs...' : 'No matching jobs found.'}</td></tr>`;
+        return;
+      }
+      jobsTable.innerHTML = rows.map((item) => `
+        <tr class="border-b align-top">
+          <td class="px-4 py-3 font-medium">${escapeHtml(item.id)}</td>
+          <td class="px-4 py-3">${escapeHtml(item.name)}</td>
+          <td class="px-4 py-3">${escapeHtml(item.phone)}</td>
+          <td class="px-4 py-3 max-w-xs">${escapeHtml(item.issue)}</td>
+          <td class="px-4 py-3">${escapeHtml(item.targetTime)}</td>
+          <td class="px-4 py-3">${escapeHtml(item.timestamp)}</td>
+          <td class="px-4 py-3">
+            <select data-job-id="${escapeHtml(item.id)}" class="rounded-lg border px-3 py-2 statusSelect">
+              ${['Queued','In Progress','Ready','Delivered'].map(s => `<option ${item.status===s?'selected':''}>${s}</option>`).join('')}
+            </select>
+          </td>
+        </tr>
+      `).join('');
+      document.querySelectorAll('.statusSelect').forEach((select) => {
+        select.addEventListener('change', async (e) => {
+          const jobId = e.target.dataset.jobId;
+          const newStatus = e.target.value;
+          select.disabled = true;
+          try {
+            const res = await fetch(API_URL, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ jobId, newStatus })
+            });
+            const json = await res.json();
+            if (!res.ok || !json.ok) throw new Error(json.error || 'Status update failed');
+            state.data = json.data || state.data;
+            render();
+          } catch (err) {
+            alert(err.message);
+            await loadData();
+          } finally {
+            select.disabled = false;
+          }
+        });
+      });
+    }
+
+    async function loadData() {
+      state.loading = true;
+      if (state.admin) render();
+      try {
+        const res = await fetch(API_URL);
+        const json = await res.json();
+        state.data = json.data || [];
+        if (state.admin) render();
+      } catch (err) {
+        formMsg.textContent = 'Unable to load job data.';
+      } finally {
+        state.loading = false;
+      }
+    }
+
+    serviceForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      formMsg.textContent = '';
+      if (!/^\d{10}$/.test(serviceForm.phone.value.trim())) {
+        formMsg.textContent = 'Enter a valid 10-digit phone number.';
+        return;
+      }
+      if (!serviceForm.name.value.trim() || !serviceForm.issue.value.trim()) {
+        formMsg.textContent = 'Name and issue are required.';
+        return;
+      }
+      formButton.disabled = true;
+      formButton.textContent = 'Submitting...';
+      const form = new FormData(serviceForm);
+      const payload = {
+        name: form.get('name'),
+        phone: form.get('phone'),
+        issue: form.get('issue'),
+        targetTime: calcTarget(),
+        status: 'Queued'
+      };
+      try {
+        const res = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const json = await res.json();
+        if (!res.ok || !json.ok) throw new Error(json.error || 'Submission failed');
+        formMsg.textContent = `Created ${json.record.id}`;
+        serviceForm.reset();
+        immediateService.checked = false;
+        calcTarget();
+        await loadData();
+      } catch (err) {
+        formMsg.textContent = err.message;
+      } finally {
+        formButton.disabled = false;
+        formButton.textContent = 'Create Job';
+      }
+    });
+
+    immediateService.addEventListener('change', calcTarget);
+    searchPhoneFilter.addEventListener('input', render);
+    el('openAdmin').addEventListener('click', openAdmin);
+    el('closeAdmin').addEventListener('click', closeAdmin);
+    verifyAdminBtn.addEventListener('click', async () => {
+      const phone = el('adminPhone').value.trim();
+      const pin = el('adminPin').value.trim();
+      verifyAdminBtn.disabled = true;
+      if (phone === '7661829283' && pin === '0101') {
+        state.admin = true;
+        closeAdmin();
+        adminPanel.classList.remove('hidden');
+        await loadData();
+        render();
+        el('adminMsg').textContent = '';
+      } else {
+        el('adminMsg').textContent = 'Invalid credentials';
+      }
+      verifyAdminBtn.disabled = false;
+    });
+
+    calcTarget();
+    loadData().catch(() => {});
+  </script>
+</body>
+</html>
