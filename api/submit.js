@@ -115,6 +115,10 @@ async function putWithRetry(buildNextData, message, maxAttempts = 3) {
   throw lastError || new Error('Failed to update data.json');
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 module.exports = async (req, res) => {
   const origin = req.headers.origin || '';
   if (req.method === 'OPTIONS') {
@@ -156,15 +160,28 @@ module.exports = async (req, res) => {
       const newStatus = String(body.newStatus || '').trim();
       if (!jobId) throw new Error('jobId is required');
       if (!['Queued', 'In Progress', 'Ready', 'Delivered'].includes(newStatus)) throw new Error('invalid status');
-      const nextData = await putWithRetry((data) => {
-        const index = data.findIndex((item) => item && item.id === jobId);
-        if (index === -1) {
-          const err = new Error('job not found');
-          err.code = 'NOT_FOUND';
-          throw err;
+      let nextData;
+      let found = false;
+      let lastNotFound;
+      for (let attempt = 0; attempt < 3 && !found; attempt += 1) {
+        try {
+          nextData = await putWithRetry((data) => {
+            const index = data.findIndex((item) => item && item.id === jobId);
+            if (index === -1) {
+              const err = new Error('job not found');
+              err.code = 'NOT_FOUND';
+              throw err;
+            }
+            found = true;
+            return data.map((item, idx) => (idx === index ? { ...item, status: newStatus } : item));
+          }, `Update status for ${jobId}`);
+        } catch (error) {
+          if (error.code !== 'NOT_FOUND') throw error;
+          lastNotFound = error;
+          if (attempt < 2) await sleep(500);
         }
-        return data.map((item, idx) => (idx === index ? { ...item, status: newStatus } : item));
-      }, `Update status for ${jobId}`);
+      }
+      if (!found) throw lastNotFound || new Error('job not found');
       const updated = nextData.find((item) => item && item.id === jobId);
       return json(res, 200, { ok: true, record: updated, data: nextData }, origin);
     }
